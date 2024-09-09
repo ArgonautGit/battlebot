@@ -1,0 +1,57 @@
+name: Diff sch/pcb and squash
+
+on:
+  workflow_dispatch:
+  push: # Only trigger when a commit is pushed.
+    paths: # Only trigger when a commit modifies either a KiCAD schematic or PCB file.
+      - "*.kicad_sch"
+      - "*.kicad_pcb"
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: write # Give write perms to GitHub token.
+    
+    env: 
+      GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}} # Token to allow pushing to repo.
+      
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # We need to look past the last few commits for proper squashing.
+
+    - name: install kicad
+      run: |
+        sudo add-apt-repository --yes ppa:kicad/kicad-8.0-releases
+        sudo apt-get update
+        sudo apt-get install --yes kicad
+    - run: kicad-cli version
+
+    - name: export sch/pcb to image # Take schematic and PCB files from the repo and convert them to images for GitHub to diff.
+      run: |
+        kicad-cli sch export svg ${{ vars.KICAD_PROJECT_NAME }}.kicad_sch # Export schematic to svg. It will be called ${{ vars.KICAD_PROJECT_NAME }}.svg.
+        mv ${{ vars.KICAD_PROJECT_NAME }}.svg docs/kicad_diff/${{ vars.KICAD_PROJECT_NAME }}_sch_diff.svg
+        # kicad-cli pcb export svg ${{ vars.KICAD_PROJECT_NAME }}.kicad_pcb # Before uncommenting this needs some additional arguements (a layer selection or something)
+        # mv ${{ vars.KICAD_PROJECT_NAME }}.svg docs/kicad_diff/${{ vars.KICAD_PROJECT_NAME }}_pcb_diff.svg
+        
+    - name: echo commit stats # Debugging. Prints out the email and name of the previous committer.
+      run: |
+        echo "$(git log -1 --pretty=%ce)"
+        echo "$(git log -1 --pretty=%cn)"
+        
+    - name: configure git # Attribute this commit to the author of the previous commit.
+      run: |
+        git config --global user.email "$(git log -1 --pretty=%ce)"
+        git config --global user.name "$(git log -1 --pretty=%cn)"
+    
+    - name: push changes # Take any changes our workflow made and push them to the main repo.
+      run: |
+        git add docs/kicad_diff/${{ vars.KICAD_PROJECT_NAME }}_sch_diff.svg
+        # git add docs/kicad_diff/${{ vars.KICAD_PROJECT_NAME }}_pcb_diff.svg
+        # Make commit and give it the same name as the previous commit (changing pcb or sch files).
+        git commit -m "$(git log -1 --skip=0 --pretty=%B | xargs && git reset --soft HEAD~)"
+        # Push. Needs to be forced because we're squashing a new commit with the previous commit.
+        git push --force
